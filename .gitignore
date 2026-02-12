@@ -1,0 +1,9 @@
+node_modules/
+playwright-report/
+test-results/
+.auth/
+.DS_Store
+.env
+.mystapp.local.json
+playwright.log
+*.log
