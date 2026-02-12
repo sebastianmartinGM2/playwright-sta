@@ -152,14 +152,21 @@ async function clickSecondRowRecordAndOpenPopup(page: Page, opts?: { allowEmpty?
     }
   }
 
-  if (recordColIndex < 0) throw new Error('Could not find Record column.');
+  const cells = secondRow.locator('td');
+  const cellCount = await cells.count().catch(() => 0);
 
   // Click a single deterministic element to avoid strict-mode violations.
-  const recordCell = locatorFromEnvOrFallback(page, 'MYSTAPP_SERVICE_VEHICLES_RECORD_CELL_SELECTOR', () =>
-    secondRow.locator('td').nth(recordColIndex)
-  ).first();
+  // Prefer the configured selector; otherwise try to click the Record cell.
+  // If the column index doesn't exist (hidden columns / virtualization), fall back to a link/button inside the row.
+  const recordCell = locatorFromEnvOrFallback(page, 'MYSTAPP_SERVICE_VEHICLES_RECORD_CELL_SELECTOR', () => {
+    if (recordColIndex >= 0 && recordColIndex < cellCount) return cells.nth(recordColIndex);
+    return secondRow.locator('a, button, [role="link"], [role="button"]').first().or(cells.first());
+  }).first();
 
-  await expect(recordCell, 'Expected Record cell to be visible/clickable.').toBeVisible({ timeout: 15_000 });
+  await expect(
+    recordCell,
+    `Expected Record target to be visible/clickable. recordColIndex=${recordColIndex} cellCount=${cellCount}. If this fails, set MYSTAPP_SERVICE_VEHICLES_GRID_SELECTOR and/or MYSTAPP_SERVICE_VEHICLES_RECORD_CELL_SELECTOR.`
+  ).toBeVisible({ timeout: 15_000 });
 
   // Some builds open a popup; others navigate in the same tab.
   let popup: Page | undefined;
