@@ -11,6 +11,7 @@
     "test:testim": "playwright test --project testim-chromium",
     "test:mystapp:setup": "playwright test --project mystapp-setup",
     "test:mystapp": "playwright test --project mystapp-chromium",
+    "test:mystapp:invoices": "playwright test tests/mystapp/invoices.spec.ts --project mystapp-chromium",
     "test:mystapp:service-vehicles": "playwright test tests/mystapp/service-vehicles.spec.ts --project mystapp-chromium",
     "test:mystapp:service-vehicles:perf": "npm run test:mystapp:service-vehicles && npm run perf:mystapp:md",
     "perf:mystapp:md": "node scripts/mystapp-perf-summary.mjs",

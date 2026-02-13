@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { hasMystappConfig, requireMystappUsers, mystappLogin } from './helpers';
+import { envIsOn, installNetworkCapture } from './netlog';
 
 /**
  * Service Vehicles “trial run” + lightweight perf capture.
@@ -34,6 +35,10 @@ function toIsoDate(raw: string, format: DateFormat) {
   const dd2 = dd.padStart(2, '0');
   const mm2 = mm.padStart(2, '0');
   return `${yyyy}-${mm2}-${dd2}`;
+}
+
+function mystappServiceVehiclesStartDate() {
+  return (process.env.MYSTAPP_SERVICE_VEHICLES_START_DATE ?? '02/01/2025').trim();
 }
 
 async function fillDateInput(page: Page, locator: Locator, rawDate: string) {
@@ -248,6 +253,18 @@ test.describe('mystapp - service vehicles', () => {
         'Missing Mystapp credentials. Set env vars or create .mystapp.local.json (see tests/mystapp/docs/README.md).'
       );
 
+      const captureNetwork = envIsOn('MYSTAPP_NETLOG');
+      const captureBodies = envIsOn('MYSTAPP_NETLOG_BODIES');
+      const net = captureNetwork
+        ? installNetworkCapture(page, testInfo, {
+            captureBodies,
+            // If you only want backend calls, set e.g. MYSTAPP_NETLOG_URL_REGEX="/api/|/graphql".
+            urlIncludeRegex: process.env.MYSTAPP_NETLOG_URL_REGEX ? new RegExp(process.env.MYSTAPP_NETLOG_URL_REGEX) : undefined,
+          })
+        : undefined;
+
+      try {
+
       const timings: Record<string, number> = {};
 
       // Requirement: wait 3 seconds after clicking Submit in login.
@@ -267,7 +284,7 @@ test.describe('mystapp - service vehicles', () => {
       // - Fill Start date with 02/01/2025
       // - Click refresh (span#refresh)
       // - Wait 3 seconds after clicking
-      const startDateRaw = '02/01/2025';
+      const startDateRaw = mystappServiceVehiclesStartDate();
 
       const startDateInput = locatorFromEnvOrFallback(page, 'MYSTAPP_SERVICE_VEHICLES_START_DATE_SELECTOR', () =>
         page
@@ -279,7 +296,11 @@ test.describe('mystapp - service vehicles', () => {
       await expect(startDateInput, 'Expected Start date input to be visible.').toBeVisible({ timeout: 30_000 });
       const fillStart = await measureMs('fill_start_date', async () => fillDateInput(page, startDateInput, startDateRaw));
       timings[fillStart.label] = fillStart.ms;
-      await expect(startDateInput).toHaveValue(startDateRaw, { timeout: 10_000 });
+      const startType = await startDateInput
+        .evaluate((el) => (el as HTMLInputElement).type)
+        .catch(() => undefined);
+      const expectedStartValue = startType === 'date' ? toIsoDate(startDateRaw, mystappDateFormat()) : startDateRaw;
+      await expect(startDateInput).toHaveValue(expectedStartValue, { timeout: 10_000 });
 
       const refresh = page.locator('#refresh').first();
       await expect(refresh, 'Expected refresh container (#refresh) to be visible.').toBeVisible({ timeout: 15_000 });
@@ -342,6 +363,9 @@ test.describe('mystapp - service vehicles', () => {
       if (process.env.MYSTAPP_PAUSE === '1') {
         if (result.popup) await result.popup.pause();
         else await page.pause();
+      }
+      } finally {
+        if (net) await net.stop();
       }
     });
   }

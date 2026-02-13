@@ -4,6 +4,11 @@ test-results/
 .auth/
 .DS_Store
 .env
+.env.*
+!.env.example
 .mystapp.local.json
 playwright.log
 *.log
+
+# Optional per-profile env files (keep only *.example committed)
+env/*.env

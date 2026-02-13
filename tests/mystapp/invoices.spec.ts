@@ -1,5 +1,6 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { hasMystappConfig, requireMystappUsers, mystappLogin } from './helpers';
+import { envIsOn, installNetworkCapture } from './netlog';
 
 /**
  * Invoices “trial run” flow.
@@ -490,7 +491,7 @@ async function clickInvoicesRefresh(page: Page) {
 }
 
 test.describe('mystapp - invoices', () => {
-  test('login + invoices: search by date range @invoices', async ({ page }) => {
+  test('login + invoices: search by date range @invoices', async ({ page }, testInfo) => {
     test.setTimeout(process.env.MYSTAPP_PAUSE === '1' ? 10 * 60_000 : 120_000);
 
     if (process.env.MYSTAPP_PAUSE === '1') {
@@ -501,6 +502,18 @@ test.describe('mystapp - invoices', () => {
       !hasMystappConfig(),
       'Missing Mystapp credentials. Set env vars or create .mystapp.local.json (see tests/mystapp/docs/README.md).'
     );
+
+    const captureNetwork = envIsOn('MYSTAPP_NETLOG');
+    const captureBodies = envIsOn('MYSTAPP_NETLOG_BODIES');
+    const net = captureNetwork
+      ? installNetworkCapture(page, testInfo, {
+          captureBodies,
+          // If you only want backend calls, set e.g. MYSTAPP_NETLOG_URL_REGEX="/api/|/graphql".
+          urlIncludeRegex: process.env.MYSTAPP_NETLOG_URL_REGEX ? new RegExp(process.env.MYSTAPP_NETLOG_URL_REGEX) : undefined,
+        })
+      : undefined;
+
+    try {
 
     const user = requireMystappUsers(1)[0]!;
     await mystappLogin(page, user);
@@ -554,7 +567,8 @@ test.describe('mystapp - invoices', () => {
     // - Click Refresh
     // - Wait 10 seconds after clicking
     // Note: the QA UI uses MM/DD/YYYY by default.
-    const fromRaw = '02/01/2025';
+    const fromRaw = (process.env.MYSTAPP_INVOICES_FROM_DATE ?? '02/01/2025').trim();
+    const toRaw = (process.env.MYSTAPP_INVOICES_TO_DATE ?? '').trim();
 
     // If Advanced Filters are open and have stale selections, clear them first.
     const resetFilters = page.getByRole('button', { name: /reset\s*filters/i }).first();
@@ -592,6 +606,12 @@ test.describe('mystapp - invoices', () => {
       await expect(from).toBeVisible({ timeout: 15_000 });
       await fillDateInput(page, from, fromRaw);
 
+      // Optional: also set End date when provided.
+      if (toRaw && (await isVisible(to))) {
+        await expect(to).toBeVisible({ timeout: 15_000 });
+        await fillDateInput(page, to, toRaw);
+      }
+
       if (process.env.MYSTAPP_DEBUG === '1') {
         const startVal = await page.locator('input[placeholder="Start date"]').first().inputValue().catch(() => '');
         const endVal = await page.locator('input[placeholder="End date"]').first().inputValue().catch(() => '');
@@ -599,11 +619,22 @@ test.describe('mystapp - invoices', () => {
       }
 
       // Ensure the visible inputs show the expected values before refreshing.
-      await expect(page.locator('input[placeholder="Start date"]').first()).toHaveValue(fromRaw, { timeout: 10_000 });
+      const startInput = page.locator('input[placeholder="Start date"]').first();
+      const startType = await startInput.evaluate((el) => (el as HTMLInputElement).type).catch(() => undefined);
+      const expectedFrom = startType === 'date' ? toIsoDate(fromRaw, mystappDateFormat()) : fromRaw;
+      await expect(startInput).toHaveValue(expectedFrom, { timeout: 10_000 });
+
+      if (toRaw) {
+        const endInput = page.locator('input[placeholder="End date"]').first();
+        const endType = await endInput.evaluate((el) => (el as HTMLInputElement).type).catch(() => undefined);
+        const expectedTo = endType === 'date' ? toIsoDate(toRaw, mystappDateFormat()) : toRaw;
+        await expect(endInput).toHaveValue(expectedTo, { timeout: 10_000 }).catch(() => undefined);
+      }
     } else if (await isVisible(range)) {
       await expect(range).toBeVisible({ timeout: 15_000 });
       // If the UI only exposes a single range input, set a same-day range.
-      await range.fill(`${fromRaw} - ${fromRaw}`);
+      const right = toRaw || fromRaw;
+      await range.fill(`${fromRaw} - ${right}`);
       try {
         await range.press('Enter');
       } catch {
@@ -656,5 +687,8 @@ test.describe('mystapp - invoices', () => {
     }
 
     await safeAttachScreenshot(test.info(), page, 'invoices-after-search');
+    } finally {
+      if (net) await net.stop();
+    }
   });
 });

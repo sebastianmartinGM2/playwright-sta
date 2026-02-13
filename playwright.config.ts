@@ -23,7 +23,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // Playwright's "using N workers" is controlled by the global worker pool.
+  // Per-project `workers` cannot exceed this value, so when running Mystapp
+  // with `MYSTAPP_WORKERS` set we also set the global workers count.
+  workers: process.env.CI ? 1 : mystappWorkers,
   reporter: [['html', { open: 'never' }], ['list']],
   use: {
     trace: 'on-first-retry',

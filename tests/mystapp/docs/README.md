@@ -15,6 +15,10 @@ La idea es que el login sea un “building block” para tests futuros (por ejem
 - `login.stress.spec.ts`
   - Corre N logins concurrentes y opcionalmente falla si se exceden umbrales.
 
+## Comandos importantes
+
+Ver `COMMANDS.md` para comandos de uso diario (workers, loops, netlog, reportes).
+
 ## Requisitos
 
 - Node 18+
@@ -22,8 +26,25 @@ La idea es que el login sea un “building block” para tests futuros (por ejem
 
 ## Configuración (env vars)
 
-Tip (recomendado): creá un archivo `.env` en la raíz del repo (está en `.gitignore`).
-El runner lo carga automáticamente, así podés correr los tests “en masa” sin pasar credenciales por parámetros.
+Tip (recomendado): usá *perfiles* de env vars.
+
+Este repo carga variables con `dotenv` desde `playwright.config.ts`.
+
+- Si creás un `.env` en la raíz, se carga automáticamente (está en `.gitignore`).
+- Si querés tener **varios** archivos para correr “perfiles” distintos, usá `DOTENV_CONFIG_PATH`.
+
+Templates:
+
+- `env/mystapp-service-vehicles.env.example`
+- `env/mystapp-invoices.env.example`
+- `env/mystapp-stress-login.env.example`
+
+Ejemplo:
+
+```bash
+cp env/mystapp-service-vehicles.env.example env/mystapp-service-vehicles.env
+DOTENV_CONFIG_PATH=env/mystapp-service-vehicles.env npm run test:mystapp:service-vehicles
+```
 
 Alternativa (más simple todavía): usá `.mystapp.local.json` (también está en `.gitignore`).
 Esto evita depender de env vars.
@@ -205,7 +226,9 @@ Este test hace:
 
 - login
 - en el Home/Dashboard hace click en el **ícono/tile de Invoices**
-- busca por rango de fechas (default: `02/01/2025` → `02/09/2026`)
+- setea **Start date** a `02/01/2025`
+- click en Refresh
+- espera 4s (para replicar el “trial run” manual)
 - adjunta un screenshot al reporte
 
 Para “verlo” corriendo (browser visible):
@@ -216,15 +239,25 @@ PW_SLOW_MO=250 npm run test:mystapp -- --grep @invoices --headed
 
 Opcional (overrides útiles):
 
+- `MYSTAPP_DATE_FORMAT` (default: `MM/DD/YYYY`, alternativa: `DD/MM/YYYY`)
 - `MYSTAPP_INVOICES_FROM_DATE` (default: `02/01/2025`)
-- `MYSTAPP_INVOICES_TO_DATE` (default: `02/09/2026`)
-- `MYSTAPP_DATE_FORMAT` (default: `DD/MM/YYYY`, alternativa: `MM/DD/YYYY`)
+- `MYSTAPP_INVOICES_TO_DATE` (opcional)
 - `MYSTAPP_INVOICES_TILE_SELECTOR` (si el tile no es `a[href*="/invoices"]`)
+- `MYSTAPP_INVOICES_PATH` (default: `/invoices`)
 - `MYSTAPP_INVOICES_FROM_SELECTOR`
 - `MYSTAPP_INVOICES_TO_SELECTOR`
 - `MYSTAPP_INVOICES_RANGE_SELECTOR` (si es un solo input tipo “rango”)
-- `MYSTAPP_INVOICES_SEARCH_SELECTOR`
-- `MYSTAPP_INVOICES_RESULTS_SELECTOR`
+- `MYSTAPP_INVOICES_SEARCH_SELECTOR` (fallback si no existe `#refresh`)
+- `MYSTAPP_INVOICES_REFRESH_SELECTOR` (default usa `#refresh`)
+- `MYSTAPP_INVOICES_GRID_SELECTOR`
+- `MYSTAPP_INVOICES_INVOICE_CELL_SELECTOR`
+- `MYSTAPP_INVOICES_INVOICE_VALUE` (si querés clickear un invoice específico)
+
+Opcional: captura de red (fetch/xhr) adjunta al reporte:
+
+- `MYSTAPP_NETLOG=1` (metadata)
+- `MYSTAPP_NETLOG_BODIES=1` (incluye body JSON/text cuando sea posible)
+- `MYSTAPP_NETLOG_URL_REGEX="/api/|/graphql"` (filtra URLs)
 
 ## Troubleshooting
 

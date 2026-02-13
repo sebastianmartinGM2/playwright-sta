@@ -73,10 +73,14 @@ Los tests viven en `tests/mystapp/` y están documentados en `tests/mystapp/docs
 Variables mínimas requeridas:
 ```bash
 export MYSTAPP_BASE_URL="https://qa.mystaapp.com"
-export MYSTAPP_USERS_COUNT="1"
-export MYSTAPP_USERS="804"
+export MYSTAPP_USERS_COUNT="1"  # usado por auth.setup y login.stress
+export MYSTAPP_USERS="804"       # o MYSTAPP_USER / MYSTAPP_USER_PREFIX
 export MYSTAPP_PASSWORD="..."
 ```
+
+Tips:
+- Documentación completa: `tests/mystapp/docs/README.md`
+- Comandos de uso diario (workers, loops, netlog): `tests/mystapp/docs/COMMANDS.md`
 
 Correr setup (genera storageState por usuario):
 ```bash
