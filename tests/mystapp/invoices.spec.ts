@@ -491,32 +491,51 @@ async function clickInvoicesRefresh(page: Page) {
 }
 
 test.describe('mystapp - invoices', () => {
-  test('login + invoices: search by date range @invoices', async ({ page }, testInfo) => {
-    test.setTimeout(process.env.MYSTAPP_PAUSE === '1' ? 10 * 60_000 : 120_000);
+  // Optional: run one full flow per user for parallel/stress runs.
+  const userCountRaw = (process.env.MYSTAPP_INVOICES_USERS ?? '1').trim();
+  const userCount = Math.max(1, Number(userCountRaw) || 1);
+  let users: ReturnType<typeof requireMystappUsers> | undefined;
+  let usersConfigError: string | undefined;
 
-    if (process.env.MYSTAPP_PAUSE === '1') {
-      page.pause();
-    }
+  try {
+    users = requireMystappUsers(userCount);
+  } catch (err) {
+    usersConfigError = err instanceof Error ? err.message : String(err);
+  }
 
-    test.skip(
-      !hasMystappConfig(),
-      'Missing Mystapp credentials. Set env vars or create .mystapp.local.json (see tests/mystapp/docs/README.md).'
-    );
+  if (!users) {
+    test('invoices (config) @invoices', async () => {
+      test.skip(true, `Mystapp user configuration error: ${usersConfigError ?? 'unknown error'}`);
+    });
+    return;
+  }
 
-    const captureNetwork = envIsOn('MYSTAPP_NETLOG');
-    const captureBodies = envIsOn('MYSTAPP_NETLOG_BODIES');
-    const net = captureNetwork
-      ? installNetworkCapture(page, testInfo, {
-          captureBodies,
-          // If you only want backend calls, set e.g. MYSTAPP_NETLOG_URL_REGEX="/api/|/graphql".
-          urlIncludeRegex: process.env.MYSTAPP_NETLOG_URL_REGEX ? new RegExp(process.env.MYSTAPP_NETLOG_URL_REGEX) : undefined,
-        })
-      : undefined;
+  for (const [i, user] of users.entries()) {
+    const index1Based = i + 1;
+    test(`login + invoices (user ${index1Based}) @invoices`, async ({ page }, testInfo) => {
+      test.setTimeout(process.env.MYSTAPP_PAUSE === '1' ? 10 * 60_000 : 120_000);
 
-    try {
+      if (process.env.MYSTAPP_PAUSE === '1') {
+        page.pause();
+      }
 
-    const user = requireMystappUsers(1)[0]!;
-    await mystappLogin(page, user);
+      test.skip(
+        !hasMystappConfig(),
+        'Missing Mystapp credentials. Set env vars or create .mystapp.local.json (see tests/mystapp/docs/README.md).'
+      );
+
+      const captureNetwork = envIsOn('MYSTAPP_NETLOG');
+      const captureBodies = envIsOn('MYSTAPP_NETLOG_BODIES');
+      const net = captureNetwork
+        ? installNetworkCapture(page, testInfo, {
+            captureBodies,
+            // If you only want backend calls, set e.g. MYSTAPP_NETLOG_URL_REGEX="/api/|/graphql".
+            urlIncludeRegex: process.env.MYSTAPP_NETLOG_URL_REGEX ? new RegExp(process.env.MYSTAPP_NETLOG_URL_REGEX) : undefined,
+          })
+        : undefined;
+
+      try {
+        await mystappLogin(page, user);
 
     await safeAttachScreenshot(test.info(), page, 'after-login');
 
@@ -686,9 +705,10 @@ test.describe('mystapp - invoices', () => {
       await safeAttachScreenshot(test.info(), result.popup, 'invoice-detail-popup');
     }
 
-    await safeAttachScreenshot(test.info(), page, 'invoices-after-search');
-    } finally {
-      if (net) await net.stop();
-    }
-  });
+        await safeAttachScreenshot(test.info(), page, 'invoices-after-search');
+      } finally {
+        if (net) await net.stop();
+      }
+    });
+  }
 });

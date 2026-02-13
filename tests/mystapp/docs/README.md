@@ -242,6 +242,7 @@ Opcional (overrides útiles):
 - `MYSTAPP_DATE_FORMAT` (default: `MM/DD/YYYY`, alternativa: `DD/MM/YYYY`)
 - `MYSTAPP_INVOICES_FROM_DATE` (default: `02/01/2025`)
 - `MYSTAPP_INVOICES_TO_DATE` (opcional)
+- `MYSTAPP_INVOICES_USERS` (default: `1`) → corre 1 test por usuario (para paralelo/stress)
 - `MYSTAPP_INVOICES_TILE_SELECTOR` (si el tile no es `a[href*="/invoices"]`)
 - `MYSTAPP_INVOICES_PATH` (default: `/invoices`)
 - `MYSTAPP_INVOICES_FROM_SELECTOR`

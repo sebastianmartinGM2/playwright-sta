@@ -80,6 +80,12 @@ Alternativa (directo con Playwright):
 npx playwright test tests/mystapp/invoices.spec.ts --project mystapp-chromium
 ```
 
+Concurrencia (1 test por usuario):
+
+```bash
+MYSTAPP_INVOICES_USERS=20 MYSTAPP_WORKERS=20 npm run test:mystapp:invoices
+```
+
 ---
 
 ## 3) Correr en loop infinito (hasta cortar manualmente)
