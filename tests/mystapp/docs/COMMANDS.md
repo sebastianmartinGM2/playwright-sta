@@ -188,7 +188,55 @@ MYSTAPP_NETLOG=1 MYSTAPP_NETLOG_URL_REGEX="/api/invoices|/api/service" npx playw
 
 ---
 
-## 6) Pausa para debug visual
+## 6) Ver la ejecución en el navegador (headed / debug)
+
+### Headed (ver el browser mientras corre)
+
+Service Vehicles:
+
+```bash
+npx playwright test tests/mystapp/service-vehicles.spec.ts --project mystapp-chromium --headed
+```
+
+Invoices:
+
+```bash
+npx playwright test tests/mystapp/invoices.spec.ts --project mystapp-chromium --headed
+```
+
+Tip: para debug, suele ayudar limitar a 1 worker:
+
+```bash
+MYSTAPP_WORKERS=1 npx playwright test tests/mystapp/service-vehicles.spec.ts --project mystapp-chromium --headed
+```
+
+### Slow motion (para ver pasos más lento)
+
+```bash
+npx playwright test tests/mystapp/service-vehicles.spec.ts --project mystapp-chromium --headed --slow-mo 250
+```
+
+### UI mode (correr/filtrar tests desde una UI)
+
+```bash
+npx playwright test --ui
+```
+
+### Debug con inspector (detiene en el primer paso)
+
+```bash
+npx playwright test tests/mystapp/service-vehicles.spec.ts --project mystapp-chromium --debug
+```
+
+Alternativa equivalente:
+
+```bash
+PWDEBUG=1 npx playwright test tests/mystapp/service-vehicles.spec.ts --project mystapp-chromium
+```
+
+---
+
+## 7) Pausa para debug visual
 
 Muchos specs soportan pausar el test para inspección:
 
@@ -198,7 +246,7 @@ MYSTAPP_PAUSE=1 npm run test:mystapp:service-vehicles
 
 ---
 
-## 7) Perf summary (si estás usando el flujo perf)
+## 8) Perf summary (si estás usando el flujo perf)
 
 Este script agrega/convierte resultados (según lo que ya tengas en `test-results/`):
 
