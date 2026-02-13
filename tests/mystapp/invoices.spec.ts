@@ -1,6 +1,18 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { hasMystappConfig, requireMystappUsers, mystappLogin } from './helpers';
 
+/**
+ * Invoices “trial run” flow.
+ *
+ * This spec favors resilience over minimal selectors because the UI can differ
+ * across environments (Ant Design inputs, changing column order, popup vs same-tab).
+ *
+ * Optional configuration hooks:
+ * - `MYSTAPP_DATE_FORMAT`: "MM/DD/YYYY" (default) or "DD/MM/YYYY"
+ * - `MYSTAPP_INVOICES_*_SELECTOR` vars to override selectors for a specific build
+ * - `MYSTAPP_INVOICES_INVOICE_VALUE`: click a specific invoice value if provided
+ */
+
 type DateFormat = 'DD/MM/YYYY' | 'MM/DD/YYYY';
 
 function escapeRegExp(s: string) {
@@ -90,12 +102,15 @@ async function fillDateInput(page: Page, locator: Locator, rawDate: string) {
 
   const attemptErrors: string[] = [];
 
+  // Readonly is common in AntD date inputs. We try to remove it, but not all builds allow it.
   const isReadOnly = await target
     .evaluate((el) => {
       const input = el as HTMLInputElement;
       return !!(input.hasAttribute?.('readonly') || (input as any).readOnly);
     })
     .catch(() => false);
+
+  // Note: `isReadOnly` is kept for diagnostics/understanding; the attempts below handle both cases.
 
   // Attempt 1: remove readonly + fill WITHOUT clicking.
   // Clicking AntD date inputs often opens the calendar popup and steals focus,
@@ -183,6 +198,7 @@ async function clickSecondRowInvoice(page: Page, opts?: { allowEmpty?: boolean }
   await expect(tableOrGrid, 'Expected invoices table/grid to be visible.').toBeVisible({ timeout: 30_000 });
 
   // Prefer accessible roles for rows/cells, but many tables in this app do not expose them.
+  // We keep both role-based and CSS-based strategies and pick whichever is usable.
   const roleRows = tableOrGrid.getByRole('row');
   const roleCells = tableOrGrid.getByRole('cell');
   const roleDataRows = roleRows.filter({ has: roleCells });
@@ -231,6 +247,7 @@ async function clickSecondRowInvoice(page: Page, opts?: { allowEmpty?: boolean }
   await expect(secondRow).toBeVisible({ timeout: 15_000 });
 
   // Try to click the "Invoice" column cell by header index.
+  // Caution: the index can be wrong if columns are hidden/reordered, so we validate later.
   const headers = tableOrGrid.getByRole('columnheader');
   let invoiceColIndex = -1;
   try {
@@ -253,6 +270,8 @@ async function clickSecondRowInvoice(page: Page, opts?: { allowEmpty?: boolean }
 
   const targetInvoiceValue = (process.env.MYSTAPP_INVOICES_INVOICE_VALUE ?? '').trim();
   if (targetInvoiceValue) {
+    // If a target invoice value is provided, clicking it is usually more stable than relying
+    // on column indices (which can shift between builds).
     const target = tableOrGrid.locator(`text=${targetInvoiceValue}`).first();
     await expect(target, `Expected invoice value '${targetInvoiceValue}' to appear in results.`).toBeVisible({ timeout: 30_000 });
     await target.click({ timeout: 15_000 });
@@ -351,6 +370,7 @@ async function clickSecondRowInvoiceAndGetInvoiceValue(page: Page, opts?: { allo
   await expect(secondRow).toBeVisible({ timeout: 15_000 });
 
   // Find invoice column index when possible.
+  // Used as a first attempt, but we keep multiple fallbacks for robustness.
   let invoiceColIndex = -1;
   try {
     const headerTexts = await tableOrGrid.getByRole('columnheader').allTextContents();
@@ -419,6 +439,7 @@ async function clickSecondRowInvoiceAndGetInvoiceValue(page: Page, opts?: { allo
   );
 
   // Click and capture popup if the app opens a new tab.
+  // Some builds navigate in the same tab, so popup is optional.
   let popup: Page | undefined;
   try {
     popup = await Promise.race([
@@ -509,6 +530,7 @@ test.describe('mystapp - invoices', () => {
     }
 
     // Fallback: if we didn't land on invoices, go directly.
+    // This makes the test resilient to dashboard layout changes.
     if (!invoicesUrlRe.test(page.url())) {
       await page.goto(mystappInvoicesPath(), { waitUntil: 'domcontentloaded', timeout: 45_000 });
       await page.waitForURL(invoicesUrlRe, { timeout: 30_000 });
@@ -594,6 +616,7 @@ test.describe('mystapp - invoices', () => {
     }
 
     // Requirement: click the refresh control after setting dates.
+    // We prefer #refresh (known app pattern) with a fallback to a generic Search/Apply button.
     if (await isVisible(page.locator('#refresh').first())) {
       await clickInvoicesRefresh(page);
     } else {
@@ -607,6 +630,8 @@ test.describe('mystapp - invoices', () => {
     }
 
     // Trial requirement: wait 4 seconds after clicking refresh.
+    // We keep this explicit delay separate from the UI waits so the test matches the
+    // originally requested manual steps.
     await page.waitForTimeout(4_000);
 
     // Pause right after refresh so we can inspect results/state.

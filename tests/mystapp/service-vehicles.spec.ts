@@ -2,6 +2,20 @@ import { performance } from 'node:perf_hooks';
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { hasMystappConfig, requireMystappUsers, mystappLogin } from './helpers';
 
+/**
+ * Service Vehicles “trial run” + lightweight perf capture.
+ *
+ * This spec is intentionally defensive because the app UI can vary by environment:
+ * - date inputs may be native `type=date` OR Ant Design DatePicker (readonly wrappers)
+ * - the results grid can transiently show "No record found" while still loading
+ * - clicking a record may open a popup (new tab) OR navigate in the same tab
+ *
+ * Configuration hooks (optional):
+ * - `MYSTAPP_DATE_FORMAT`: "MM/DD/YYYY" (default) or "DD/MM/YYYY"
+ * - `MYSTAPP_SERVICE_VEHICLES_*_SELECTOR` vars to override brittle selectors
+ * - `MYSTAPP_SERVICE_VEHICLES_USERS` to run the flow for N users
+ */
+
 type DateFormat = 'DD/MM/YYYY' | 'MM/DD/YYYY';
 
 function mystappDateFormat(): DateFormat {
@@ -28,6 +42,7 @@ async function fillDateInput(page: Page, locator: Locator, rawDate: string) {
   const value = inputType === 'date' ? toIsoDate(rawDate, format) : rawDate;
 
   // AntD DatePicker sometimes wraps the real <input> and marks it readonly.
+  // We target the inner input when present, remove readonly, then fill + dispatch events.
   const target = locator.locator('input, textarea').first().or(locator);
 
   const readValue = async () => (await target.inputValue().catch(() => '')).trim();
@@ -41,6 +56,7 @@ async function fillDateInput(page: Page, locator: Locator, rawDate: string) {
   };
 
   // Attempt 1: make editable + fill.
+  // Preferred because it avoids the calendar popup stealing focus.
   await makeEditable();
   await target.fill(value, { timeout: 10_000 });
   await target.evaluate((el) => {
@@ -51,6 +67,7 @@ async function fillDateInput(page: Page, locator: Locator, rawDate: string) {
   if ((await readValue()) === value) return;
 
   // Attempt 2: type + commit.
+  // Fallback when the controlled component rejects `.fill()`.
   await target.click({ timeout: 10_000, force: true });
   await target.press('ControlOrMeta+A');
   await target.press('Backspace');
@@ -63,6 +80,7 @@ async function fillDateInput(page: Page, locator: Locator, rawDate: string) {
 }
 
 async function measureMs<T>(label: string, fn: () => Promise<T>): Promise<{ label: string; ms: number; result: T }> {
+  // Uses `performance.now()` to avoid Date() resolution issues and provide consistent timings.
   const start = performance.now();
   const result = await fn();
   const ms = Math.round(performance.now() - start);
@@ -78,6 +96,8 @@ async function waitForServiceVehiclesGridReady(page: Page) {
   const noRecordsRow = table.locator('tbody tr:has-text("No record found")');
   const dataRows = table.locator('tbody tr:has(td)').filter({ hasNot: noRecordsRow });
 
+  // The UI can briefly show "No record found" while requests are still in-flight.
+  // To avoid false negatives, we only treat the empty state as final after the full wait.
   let sawEmpty = false;
   const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
@@ -135,7 +155,8 @@ async function clickSecondRowRecordAndOpenPopup(page: Page, opts?: { allowEmpty?
 
   const secondRow = dataRows.nth(1);
 
-  // Find "Record" column index when possible.
+  // Find the "Record" column index when possible.
+  // This gives us a deterministic click target (important with Playwright strict mode).
   let recordColIndex = -1;
   try {
     const headerTexts = await table.getByRole('columnheader').allTextContents();
@@ -169,6 +190,7 @@ async function clickSecondRowRecordAndOpenPopup(page: Page, opts?: { allowEmpty?
   ).toBeVisible({ timeout: 15_000 });
 
   // Some builds open a popup; others navigate in the same tab.
+  // We race popup detection with the click to handle both patterns.
   let popup: Page | undefined;
   try {
     popup = await Promise.race([
@@ -196,6 +218,8 @@ async function clickSecondRowRecordAndOpenPopup(page: Page, opts?: { allowEmpty?
 }
 
 test.describe('mystapp - service vehicles', () => {
+  // This spec can run one flow per user. In stress runs, `MYSTAPP_WORKERS` should
+  // typically match the user count so each worker uses a distinct account.
   const userCountRaw = (process.env.MYSTAPP_SERVICE_VEHICLES_USERS ?? '1').trim();
   const userCount = Math.max(1, Number(userCountRaw) || 1);
   let users: ReturnType<typeof requireMystappUsers> | undefined;
@@ -227,10 +251,12 @@ test.describe('mystapp - service vehicles', () => {
       const timings: Record<string, number> = {};
 
       // Requirement: wait 3 seconds after clicking Submit in login.
+      // Note: the wait is implemented inside `mystappLogin` and included in the `login` timing.
       const login = await measureMs('login', async () => mystappLogin(page, user, { afterSubmitWaitMs: 3_000 }));
       timings[login.label] = login.ms;
 
       // Deterministic navigation to Service Vehicles.
+      // We rely on an URL heuristic rather than page-specific selectors to keep this portable.
       const nav = await measureMs('goto_service_vehicles', async () =>
         page.goto(mystappServiceVehiclesPath(), { waitUntil: 'domcontentloaded', timeout: 45_000 })
       );
@@ -259,6 +285,8 @@ test.describe('mystapp - service vehicles', () => {
       await expect(refresh, 'Expected refresh container (#refresh) to be visible.').toBeVisible({ timeout: 15_000 });
       await refresh.scrollIntoViewIfNeeded();
       const refreshAndGrid = await measureMs('refresh_to_grid_ready', async () => {
+        // Some builds wrap the clickable element inside #refresh.
+        // Clicking via JS is often more reliable when transient overlays are present.
         await refresh.evaluate((el) => {
           const target = el.querySelector('span[aria-label="sync"], .anticon-sync') ?? el;
           (target as HTMLElement).click();
@@ -294,6 +322,7 @@ test.describe('mystapp - service vehicles', () => {
       });
 
       // Persist for aggregation across many users/tests.
+      // `timings.json` is both attached to the report and written to the test output directory.
       const fs = await import('node:fs/promises');
       await fs.writeFile(timingsPath, timingsJson, 'utf8');
 

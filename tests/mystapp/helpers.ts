@@ -10,6 +10,16 @@ import { readMystappLocalConfig } from './localConfig';
  * - Reusable login primitive (`mystappLogin`) for future tests.
  * - Configurable via env vars (URL, users, selectors, SLO thresholds).
  * - Optional API-level timing capture without hard-coding endpoints.
+ *
+ * Why there are a few “defensive” patterns here:
+ * - Mystapp’s login UX can vary by environment/build: sometimes it lives in an iframe,
+ *   sometimes it uses custom components (not plain `input[type=password]`).
+ * - To reduce flakiness, we:
+ *   - resolve selectors via a small set of heuristics (label/placeholder/role),
+ *   - allow explicit selector overrides via env vars,
+ *   - and use a generic post-submit success heuristic (leave the `/login` URL).
+ * - API timing capture is optional and regex-based so tests don’t depend on a fixed
+ *   endpoint path (which often differs across QA/staging/prod).
  */
 
 export type MystappUser = {
@@ -62,16 +72,16 @@ export function ensureMystappAuthDir() {
 export function hasMystappConfig() {
   const local = readMystappLocalConfig();
 
-  // Base URL is provided by the Playwright project (`mystapp-*`) and defaults
-  // to QA in playwright.config.ts. We still validate that we have a non-empty
-  // value somewhere to avoid accidental relative navigations.
+  // In most runs `baseURL` comes from the Playwright project (`mystapp-*`) and may
+  // have a default in playwright.config.ts. We still validate a non-empty value to
+  // avoid accidental relative navigations (e.g. `about:blank/login`).
   const baseUrl = (process.env.MYSTAPP_BASE_URL ?? local?.baseURL ?? 'https://qa.mystaapp.com').trim();
 
   // Credentials can come from env vars OR .mystapp.local.json.
   // Supported forms:
-  // - MYSTAPP_USERS (csv) + MYSTAPP_PASSWORD
-  // - MYSTAPP_USER or MYSTAPP_USERNAME + MYSTAPP_PASSWORD
-  // - MYSTAPP_USER_PREFIX + MYSTAPP_PASSWORD
+  // - `MYSTAPP_USERS` (csv) + `MYSTAPP_PASSWORD`
+  // - `MYSTAPP_USER` or `MYSTAPP_USERNAME` + `MYSTAPP_PASSWORD`
+  // - `MYSTAPP_USER_PREFIX` + `MYSTAPP_PASSWORD`
   const password = (process.env.MYSTAPP_PASSWORD ?? local?.password ?? '').trim();
   const usersCsv = (process.env.MYSTAPP_USERS ?? '').trim();
   const localUsers = local?.users ?? (local?.user ? [local.user] : undefined);
@@ -94,8 +104,15 @@ export function requireMystappUsers(count: number): MystappUser[] {
   const singleUser = (process.env.MYSTAPP_USER ?? process.env.MYSTAPP_USERNAME ?? local?.user ?? '').trim() || undefined;
   const localUsers = local?.users;
 
-  // Option A: explicit list: MYSTAPP_USERS="u1,u2,u3" + MYSTAPP_PASSWORD
-  // Option A(local): users[] in .mystapp.local.json + password
+  // Resolution strategy summary:
+  // 1) Explicit list (env CSV or `users[]` in local config) + shared password.
+  // 2) Single user (env/local) + password.
+  //    - If `count>1`, we fail by default to avoid shared-session conflicts.
+  //    - Set `MYSTAPP_REUSE_SINGLE_USER=1` to intentionally reuse one user.
+  // 3) Generated users via prefix + index (e.g. user01, user02, ...).
+  //
+  // Option A: explicit list: `MYSTAPP_USERS="u1,u2,u3"` + `MYSTAPP_PASSWORD`
+  // Option A(local): `users[]` in .mystapp.local.json + password
   const explicitUsernames = usersCsv
     ? usersCsv
         .split(',')
@@ -115,7 +132,9 @@ export function requireMystappUsers(count: number): MystappUser[] {
     return explicitUsernames.slice(0, count).map((username) => ({ username, password }));
   }
 
-  // Option A0: a single user (env/local) + password
+  // Option A0: a single user (env/local) + password.
+  // Useful for quick runs; for parallel/stress, prefer multiple users to avoid
+  // session invalidation and test interference.
   if (singleUser) {
     if (!password) {
       throw new Error('Missing MYSTAPP_PASSWORD. When using a single user (MYSTAPP_USER/MYSTAPP_USERNAME), provide MYSTAPP_PASSWORD.');
@@ -135,14 +154,15 @@ export function requireMystappUsers(count: number): MystappUser[] {
     return [{ username: singleUser, password }];
   }
 
-  // Option B: generated: MYSTAPP_USER_PREFIX="user" + MYSTAPP_PASSWORD
+  // Option B: generated: `MYSTAPP_USER_PREFIX="user"` + `MYSTAPP_PASSWORD`.
+  // Convention: prefix + 2-digit index for stable ordering.
   if (!userPrefix || !password) {
     throw new Error(
       'Missing mystapp credentials. Set either MYSTAPP_USERS (comma-separated) + MYSTAPP_PASSWORD, or MYSTAPP_USER/MYSTAPP_USERNAME + MYSTAPP_PASSWORD, or MYSTAPP_USER_PREFIX + MYSTAPP_PASSWORD, or use .mystapp.local.json.'
     );
   }
 
-  // user-01, user-02 ... by default: prefix + index
+  // user01, user02 ... by default: prefix + index
   return Array.from({ length: count }, (_, i) => {
     const index1Based = i + 1;
     const padded = String(index1Based).padStart(2, '0');
@@ -167,6 +187,8 @@ export function mystappLoginPath() {
 export function mystappLoginApiUrlRegex(): RegExp | undefined {
   const raw = process.env.MYSTAPP_LOGIN_API_URL_REGEX;
   if (!raw || !raw.trim()) return undefined;
+  // Interpreted as a JavaScript RegExp pattern.
+  // Tip: use alternation for multiple endpoints: "/api/auth/login|/oauth/token".
   return new RegExp(raw.trim());
 }
 
@@ -209,6 +231,8 @@ function locatorFromEnvOrFallback(page: Page, envName: string, fallback: () => R
 }
 
 async function firstVisibleLocator(candidates: Array<ReturnType<Page['locator']>>) {
+  // Pick one deterministic, visible target to avoid strict-mode violations.
+  // Some candidates may throw while the DOM is in transition; treat those as "not visible".
   for (const candidate of candidates) {
     const loc = candidate.first();
     try {
@@ -223,6 +247,7 @@ async function firstVisibleLocator(candidates: Array<ReturnType<Page['locator']>
 async function mystappFindLoginRoot(page: Page): Promise<Page | Frame> {
   // Some environments render login inside an iframe, and not all of them use
   // native input[type=password] (custom components / role=textbox).
+  // We first check the main page, then scan frames, so tests work in both models.
   const looksLikeLoginUi = async (root: Page | Frame) => {
     const hasPassword = await root.locator('input[type="password"]').first().isVisible().catch(() => false);
     const hasTextbox = await root.getByRole('textbox').first().isVisible().catch(() => false);
@@ -270,6 +295,8 @@ export async function mystappLogin(page: Page, user: MystappUser, options?: Myst
     ? (async () => {
         const apiStart = Date.now();
         try {
+          // Optional metric: time-to-first-response for the first request whose URL matches
+          // the configured regex. This is intentionally endpoint-agnostic.
           const response = await page.waitForResponse((r) => apiRegex.test(r.url()), { timeout: 20_000 });
           apiMs = Date.now() - apiStart;
           apiStatus = response.status();
@@ -282,11 +309,13 @@ export async function mystappLogin(page: Page, user: MystappUser, options?: Myst
     : undefined;
 
   // Some environments redirect /login if already authenticated.
+  // `waitUntil: 'commit'` makes this fast and avoids waiting for full SPA hydration.
   await page.goto(mystappLoginPath(), { waitUntil: 'commit', timeout: 45_000 }).catch(() => undefined);
 
   const loginRegex = new RegExp(`${escapeRegex(mystappLoginPath())}($|[?#])`);
 
   // If we're already logged in, don't try to fill the form.
+  // This keeps re-runs fast and avoids flakiness from transient login UI states.
   if (!loginRegex.test(page.url())) {
     await apiWaitPromise;
     return {
@@ -298,6 +327,8 @@ export async function mystappLogin(page: Page, user: MystappUser, options?: Myst
   }
 
   // Wait briefly for the login UI to actually render (SPA/iframes can be slow).
+  // This is a bounded polling loop rather than a single selector wait because the
+  // login can appear in the main document or inside an iframe.
   const renderDeadline = Date.now() + 20_000;
   while (Date.now() < renderDeadline) {
     const onPage = await page
@@ -335,6 +366,7 @@ export async function mystappLogin(page: Page, user: MystappUser, options?: Myst
 
   // Some login screens use TWO password inputs:
   // first = masked username/code, second = password.
+  // We handle this by (optionally) re-resolving the second password field after filling username.
   const passwordInputs = root.locator('input[type="password"]');
   const passwordInputsCount = await passwordInputs.count().catch(() => 0);
 
@@ -403,11 +435,13 @@ export async function mystappLogin(page: Page, user: MystappUser, options?: Myst
   await password.fill(user.password);
 
   if (submit) {
+    // Prefer clicking submit if we found a deterministic element; fall back to Enter if click is intercepted.
     await submit.click({ force: true, timeout: 5_000 }).catch(async () => {
       await password!.focus({ timeout: 2_000 }).catch(() => undefined);
       await page.keyboard.press('Enter', { delay: 10 }).catch(() => undefined);
     });
   } else {
+    // If we can't find a submit button reliably, submitting via Enter is typically accepted.
     await password.focus({ timeout: 2_000 }).catch(() => undefined);
     await page.keyboard.press('Enter', { delay: 10 }).catch(() => undefined);
   }
@@ -418,6 +452,7 @@ export async function mystappLogin(page: Page, user: MystappUser, options?: Myst
   }
 
   // Generic success heuristic: leave the login page (or the app navigates somewhere else).
+  // We don't assert a specific post-login element here because that varies across tenants/pages.
   await expect(page).not.toHaveURL(loginRegex, { timeout: 20_000 });
 
   await apiWaitPromise;
